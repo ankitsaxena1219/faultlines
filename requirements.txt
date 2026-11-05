@@ -5,3 +5,4 @@ kagglehub>=0.2.0
 jupyter
 matplotlib
 setuptools
+scikit-learn

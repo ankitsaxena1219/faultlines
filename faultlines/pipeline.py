@@ -14,6 +14,7 @@ def get_log_return_matrix(
     end_date: str,
     asset_type: str = None,  # 'Stock', 'ETF', or None
     min_obs_pct: float = 0.90,
+    fill_missing: bool = True,
 ) -> pd.DataFrame:
   """Fetches an aligned log-return matrix (Days x Tickers) for a specified date range.
 
@@ -53,7 +54,11 @@ def get_log_return_matrix(
   pivot_df = pivot_df.dropna(how="all", axis=0)
 
   min_valid_rows = int(len(pivot_df) * min_obs_pct)
-  pivot_df = pivot_df.dropna(thresh=min_valid_rows, axis=1).fillna(0)
+  pivot_df = pivot_df.dropna(thresh=min_valid_rows, axis=1)
+
+  # Optionally fill remaining missing returns
+  if fill_missing:
+    pivot_df = pivot_df.fillna(0)
 
   return pivot_df
 
