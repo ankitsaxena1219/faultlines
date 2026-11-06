@@ -6,3 +6,5 @@ jupyter
 matplotlib
 setuptools
 scikit-learn
+
+networkx>=3.2
