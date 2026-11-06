@@ -148,23 +148,54 @@ def compare_communities_to_sectors(
         valid["Community"]
     )
 
-    community_summary = (
+    # Calculate total community sizes, including stocks without SIC metadata.
+    total_counts = (
+        details.groupby("Community")
+        .agg(Total_Stocks=("Ticker", "count"))
+    )
+
+    # Calculate industry composition using only stocks with SIC metadata.
+    classified_summary = (
         valid.groupby("Community")
         .agg(
-            Stock_Count=("Ticker", "count"),
+            Stocks_With_SIC=("Ticker", "count"),
             Number_of_Industries=("sic", "nunique"),
             Dominant_Industry=("sicDescription",
                                lambda x: x.value_counts().index[0]),
             Dominant_Industry_Count=("sicDescription",
-                                    lambda x: x.value_counts().iloc[0]),
+                                     lambda x: x.value_counts().iloc[0]),
         )
-        .reset_index()
+    )
+
+    community_summary = total_counts.join(
+        classified_summary, how="left"
+    ).reset_index()
+
+    community_summary["Stocks_With_SIC"] = (
+        community_summary["Stocks_With_SIC"].fillna(0).astype(int)
+    )
+
+    community_summary["Stocks_Without_SIC"] = (
+        community_summary["Total_Stocks"]
+        - community_summary["Stocks_With_SIC"]
+    )
+
+    community_summary["Number_of_Industries"] = (
+        community_summary["Number_of_Industries"].fillna(0).astype(int)
+    )
+
+    community_summary["Dominant_Industry"] = (
+        community_summary["Dominant_Industry"].fillna("No SIC data")
+    )
+
+    community_summary["Dominant_Industry_Count"] = (
+        community_summary["Dominant_Industry_Count"].fillna(0).astype(int)
     )
 
     community_summary["Industry_Concentration"] = (
         community_summary["Dominant_Industry_Count"]
-        / community_summary["Stock_Count"]
-    )
+        / community_summary["Stocks_With_SIC"].replace(0, pd.NA)
+    ).fillna(0)
 
     return details, community_summary, ari
 

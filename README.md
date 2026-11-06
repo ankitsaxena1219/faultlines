@@ -40,3 +40,10 @@ from faultlines import run_data_quality_checks
 
 run_data_quality_checks()
 ```
+
+
+### 5. Community Detection & Network Analysis (Task 4)
+
+Implementation: `faultlines/communities.py`
+
+Results: `results/task4/`
