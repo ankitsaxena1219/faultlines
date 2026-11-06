@@ -64,18 +64,24 @@ def get_log_return_matrix(
 
 
 def get_ticker_metadata(tickers: list = None) -> pd.DataFrame:
-  """Fetches SEC metadata (Company Name, CIK) for a list of tickers."""
-  # MODIFIED HERE: Use DB_PATH instead of "faultlines.duckdb"
+  """Fetches SEC metadata (Company Name, CIK, SIC and SIC Description)
+  for a list of tickers."""
+
   con = duckdb.connect(DB_PATH, read_only=True)
 
   query = """
-        SELECT 
+        SELECT
             REPLACE(p.Ticker, '.us', '') AS Ticker,
             p.Asset_Type,
             m.Company_Name,
-            m.cik_str
-        FROM (SELECT DISTINCT Ticker, Asset_Type FROM raw_prices) p
-        LEFT JOIN sec_metadata m 
+            m.cik_str,
+            m.sic,
+            m.sicDescription
+        FROM (
+            SELECT DISTINCT Ticker, Asset_Type
+            FROM raw_prices
+        ) p
+        LEFT JOIN sec_metadata m
             ON UPPER(REPLACE(p.Ticker, '.us', '')) = UPPER(m.Ticker)
     """
 
@@ -83,9 +89,11 @@ def get_ticker_metadata(tickers: list = None) -> pd.DataFrame:
   con.close()
 
   if tickers:
-    df = df[df["Ticker"].isin(tickers)]
+    requested_tickers = [t.upper() for t in tickers]
+    df = df[df["Ticker"].str.upper().isin(requested_tickers)]
 
   return df
+
 
 
 if __name__ == "__main__":
