@@ -1,0 +1,2 @@
+start_date,end_date,n_assets,calm_days,turbulent_days,ann_vol_calm,ann_vol_turbulent,variance_ratio_delta,mean_corr_calm,mean_corr_turbulent_raw,mean_corr_turbulent_adj,pct_pairs_true_contagion
+2010-01-01,2017-12-31,50,1485,495,0.13119597630087204,0.261591231556938,2.97562427390272,0.21197973059558792,0.45469559482073424,0.2586703112540929,49.55102040816327
