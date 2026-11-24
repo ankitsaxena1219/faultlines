@@ -1,15 +1,107 @@
 
 """Community detection and stock-sector analysis for FaultLines."""
 
+from collections import OrderedDict
+import hashlib
+
 import networkx as nx
 import numpy as np
 import pandas as pd
 from sklearn.metrics import adjusted_rand_score
 
 
+_GRAPH_CACHE_MAXSIZE = 8
+_GRAPH_CACHE: OrderedDict[tuple, nx.Graph] = OrderedDict()
+
+
+def _prepare_returns(returns_df: pd.DataFrame) -> pd.DataFrame:
+    """Validate and normalize a returns matrix used by rolling analyses."""
+    if not isinstance(returns_df, pd.DataFrame) or returns_df.empty:
+        raise ValueError("returns_df must be a non-empty DataFrame.")
+
+    if returns_df.index.has_duplicates:
+        raise ValueError("returns_df index contains duplicate observations.")
+
+    if not returns_df.index.is_monotonic_increasing:
+        raise ValueError("returns_df index must be sorted in ascending order.")
+
+    returns = returns_df.select_dtypes(include=[np.number]).copy()
+    if returns.empty:
+        raise ValueError("No numeric return columns found.")
+
+    if returns.columns.duplicated().any():
+        raise ValueError("Duplicate ticker columns found.")
+
+    returns = returns.replace([np.inf, -np.inf], np.nan)
+    returns = returns.dropna(axis=1, how="all")
+    returns = returns.dropna(axis=0, how="all")
+
+    if returns.empty or returns.shape[1] == 0:
+        raise ValueError("No valid return observations found.")
+
+    return returns
+
+
+def _returns_cache_key(
+    returns: pd.DataFrame,
+    threshold: float,
+    min_periods: int,
+) -> tuple:
+    """Create a stable, bounded-cache key for a return window."""
+    values_hash = hashlib.sha256(
+        pd.util.hash_pandas_object(returns, index=True).values.tobytes()
+    ).hexdigest()
+    return (
+        tuple(map(str, returns.columns)),
+        values_hash,
+        threshold,
+        min_periods,
+    )
+
+
+def validate_rolling_input(
+    returns_df: pd.DataFrame,
+    window_size: int,
+    step_size: int,
+) -> pd.DataFrame:
+    """Return coverage diagnostics for the windows used by rolling analyses.
+
+    All-null dates are excluded before windowing.  The returned report makes
+    ticker coverage and the effective date range explicit instead of silently
+    treating missing observations as zero returns.
+    """
+    if window_size <= 0 or step_size <= 0:
+        raise ValueError("Window size and step size must be positive.")
+
+    returns = _prepare_returns(returns_df)
+    if len(returns) < window_size:
+        raise ValueError("Not enough valid observations for the selected window.")
+
+    rows = []
+    for window_number, start in enumerate(
+        range(0, len(returns) - window_size + 1, step_size)
+    ):
+        window = returns.iloc[start:start + window_size]
+        observed = window.notna().sum()
+        rows.append({
+            "Window": window_number,
+            "Window_Start": window.index[0],
+            "Window_End": window.index[-1],
+            "Window_Rows": len(window),
+            "Ticker_Count": int((observed > 0).sum()),
+            "Complete_Ticker_Count": int((observed == len(window)).sum()),
+            "Mean_Ticker_Coverage": float(observed.div(len(window)).mean()),
+            "Min_Ticker_Coverage": float(observed.div(len(window)).min()),
+        })
+
+    return pd.DataFrame(rows)
+
+
 def build_correlation_graph(
     returns_df: pd.DataFrame,
     threshold: float = 0.30,
+    min_periods: int = 30,
+    use_cache: bool = True,
 ) -> nx.Graph:
     """
     Build a weighted stock network from daily stock returns.
@@ -21,39 +113,34 @@ def build_correlation_graph(
     if not 0 <= threshold <= 1:
         raise ValueError("threshold must be between 0 and 1.")
 
-    returns = returns_df.select_dtypes(include=[np.number]).copy()
+    if min_periods <= 0:
+        raise ValueError("min_periods must be greater than zero.")
 
-    if returns.empty:
-        raise ValueError("No numeric return columns found.")
+    returns = _prepare_returns(returns_df)
+    cache_key = _returns_cache_key(returns, threshold, min_periods)
 
-    if returns.columns.duplicated().any():
-        raise ValueError("Duplicate ticker columns found.")
+    if use_cache and cache_key in _GRAPH_CACHE:
+        _GRAPH_CACHE.move_to_end(cache_key)
+        return _GRAPH_CACHE[cache_key].copy()
 
-    returns = returns.replace([np.inf, -np.inf], np.nan)
-    returns = returns.dropna(axis=1, how="all")
-
-    if returns.shape[1] == 0:
-        raise ValueError("No valid ticker columns found.")
-
-    correlations = returns.corr(min_periods=30)
+    correlations = returns.corr(min_periods=min_periods)
 
     graph = nx.Graph()
     graph.add_nodes_from(correlations.columns)
 
-    tickers = correlations.columns.tolist()
+    upper = np.triu(np.ones(correlations.shape, dtype=bool), k=1)
+    edges = correlations.where(upper).stack()
+    edges = edges[edges >= threshold]
+    graph.add_weighted_edges_from(
+        (ticker_a, ticker_b, float(correlation))
+        for (ticker_a, ticker_b), correlation in edges.items()
+    )
 
-    for i in range(len(tickers)):
-        for j in range(i + 1, len(tickers)):
-            ticker_a = tickers[i]
-            ticker_b = tickers[j]
-            correlation = correlations.loc[ticker_a, ticker_b]
-
-            if pd.notna(correlation) and correlation >= threshold:
-                graph.add_edge(
-                    ticker_a,
-                    ticker_b,
-                    weight=float(correlation),
-                )
+    if use_cache:
+        _GRAPH_CACHE[cache_key] = graph.copy()
+        _GRAPH_CACHE.move_to_end(cache_key)
+        while len(_GRAPH_CACHE) > _GRAPH_CACHE_MAXSIZE:
+            _GRAPH_CACHE.popitem(last=False)
 
     return graph
 
@@ -254,8 +341,9 @@ def analyze_temporal_communities(
     if window_size <= 0 or step_size <= 0:
         raise ValueError("Window size and step size must be positive.")
 
+    returns_df = _prepare_returns(returns_df)
     if len(returns_df) < window_size:
-        raise ValueError("Not enough observations for the selected window.")
+        raise ValueError("Not enough valid observations for the selected window.")
 
     temporal_rows = []
     stability_frames = []
@@ -432,8 +520,9 @@ def analyze_temporal_network_metrics(
     if window_size <= 0 or step_size <= 0:
         raise ValueError("Window size and step size must be positive.")
 
+    returns_df = _prepare_returns(returns_df)
     if len(returns_df) < window_size:
-        raise ValueError("Not enough observations for the selected window.")
+        raise ValueError("Not enough valid observations for the selected window.")
 
     rows = []
 
@@ -510,8 +599,9 @@ def analyze_temporal_stock_centrality(
     if window_size <= 0 or step_size <= 0:
         raise ValueError("Window size and step size must be positive.")
 
+    returns_df = _prepare_returns(returns_df)
     if len(returns_df) < window_size:
-        raise ValueError("Not enough observations for the selected window.")
+        raise ValueError("Not enough valid observations for the selected window.")
 
     results = []
 
